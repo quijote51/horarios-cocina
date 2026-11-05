@@ -35,14 +35,17 @@ async function cargar(){
   let dias='';for(let i=0;i<21;i++){const d=new Date(hoy);d.setDate(d.getDate()+i);const k=iso(d),t=m[k]||'';
     dias+=`<div class="d ${i===0?'hoy':''}"><span>${i===0?'Hoy':DL[d.getDay()]+' '+d.getDate()+' '+ML[d.getMonth()]}</span><span class="t ${cls(t)}">${esc(t||'sin turno')}</span></div>`}
   const vac=r.vacaciones.length?r.vacaciones.map(v=>`<div class="d"><span>${esc(v.tipo)}</span><span>${fd(v.desde)} – ${fd(v.hasta)}</span></div>`).join(''):'<div class="mu">Sin vacaciones apuntadas.</div>';
-  const pet=r.peticiones.length?r.peticiones.map(p=>`<div class="d"><span>${esc(p.tipo)} ${p.desde?fd(p.desde):''}${p.hasta&&p.hasta!==p.desde?' – '+fd(p.hasta):''}</span><span class="${p.estado==='aprobada'?'ok':p.estado==='rechazada'?'er':'mu'}">${esc(p.estado)}</span></div>`).join(''):'<div class="mu">No has pedido nada.</div>';
-  A.innerHTML=`<h1>Hola, ${esc(r.nombre)}</h1><div class="mu">Tus turnos de las próximas 3 semanas</div>
+  const pet=r.peticiones.length?r.peticiones.map(p=>`<div class="d"><span>${esc(p.tipo)}${p.con?' con '+esc(p.con):''} ${p.desde?fd(p.desde):''}${p.hasta&&p.hasta!==p.desde&&p.tipo!=='intercambio'?' – '+fd(p.hasta):''}</span><span class="${p.estado==='aprobada'?'ok':p.estado==='rechazada'?'er':'mu'}">${esc(p.estado)}</span></div>`).join(''):'<div class="mu">No has pedido nada.</div>';
+  const av=(r.avisos||[]).length?`<div class="c"><h2>Avisos</h2>${r.avisos.map(a=>`<div class="d"><span>${esc(a.x)}</span><span class="mu">${fd(a.f)}</span></div>`).join('')}</div>`:'';
+  const co=(r.companeros||[]).map(c=>`<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join('');
+  A.innerHTML=`<h1>Hola, ${esc(r.nombre)}</h1><div class="mu">Tus turnos de las próximas 3 semanas</div>${av}
   <div class="c">${dias}</div><div class="c"><h2>Vacaciones</h2>${vac}</div>
-  <form class="c" id="f"><h2>Pedir algo al jefe</h2><div class="g"><label>Tipo<select id="tp"><option value="libre">Día libre</option><option value="cambio">Cambio de turno</option><option value="vacaciones">Vacaciones</option><option value="otro">Otro</option></select></label><span></span><label>Desde<input type="date" id="de" required></label><label>Hasta<input type="date" id="ha"></label></div><label style="margin:8px 0">Nota<textarea id="no" rows="2" maxlength="300"></textarea></label><button type="submit">Enviar petición</button><div class="mu" id="ms">${msg}</div></form>
+  <form class="c" id="f"><h2>Pedir algo al jefe</h2><div class="g"><label>Tipo<select id="tp"><option value="libre">Día libre</option><option value="cambio">Cambio de turno</option><option value="vacaciones">Vacaciones</option><option value="intercambio">Intercambiar turno con un compañero</option><option value="otro">Otro</option></select></label><label id="lc" style="display:none">Con quién<select id="co">${co}</select></label><label>Desde<input type="date" id="de" required></label><label>Hasta<input type="date" id="ha"></label></div><label style="margin:8px 0">Nota<textarea id="no" rows="2" maxlength="300"></textarea></label><button type="submit">Enviar petición</button><div class="mu" id="ms">${msg}</div></form>
   <div class="c"><h2>Mis peticiones</h2>${pet}</div>`;
+  $('#tp').onchange=()=>{$('#lc').style.display=$('#tp').value==='intercambio'?'flex':'none'};
   $('#f').onsubmit=async e=>{e.preventDefault();const de=$('#de').value,ha=$('#ha').value||de;
-    const ok=await rpc('hz_pedir',{p_token:tok,p_tipo:$('#tp').value,p_desde:de,p_hasta:ha,p_nota:$('#no').value});
-    msg=ok===true?'Enviada. Tu jefe la verá.':'No se pudo enviar (máximo 10 pendientes).';cargar()}
+    const ok=await rpc('hz_pedir',{p_token:tok,p_tipo:$('#tp').value,p_desde:de,p_hasta:ha,p_nota:$('#no').value,p_con:$('#tp').value==='intercambio'?$('#co').value:null});
+    msg=ok===true?'Enviada. Tu jefe la verá.':'No se pudo enviar. Revisa los datos (máximo 10 pendientes).';cargar()}
 }
 cargar();document.addEventListener('visibilitychange',()=>{if(!document.hidden)cargar()});
 </script></body></html>

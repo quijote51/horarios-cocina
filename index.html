@@ -69,6 +69,8 @@ textarea,input,select{font:inherit;color:var(--fg);background:var(--bg);border:1
 .login{max-width:340px;margin:12vh auto 0;display:flex;flex-direction:column;gap:10px}
 .est{font-size:.76rem;color:var(--muted)}.est.err{color:var(--bad-fg)}
 @media(max-width:520px){h1{font-size:1.35rem}}
+.pt{display:none;font:700 1.2rem var(--font-display);margin:0 0 6px}
+@media print{@page{size:landscape;margin:10mm}body{background:#fff;color:#000;padding:0}nav,header .reloj,.bar,.editor,.aviso,.est,.sub a{display:none!important}.tabla{overflow:visible;border:0}table{min-width:0}.pt{display:block!important}}
 </style></head><body>
 <div class="wrap" id="raiz"></div>
 <script>
@@ -79,6 +81,7 @@ const GRUPOS=['Jefatura','Cocineros','Segunda cocina','Ayudantes','Fregantinas']
 const ROLES=['Jefe de cocina','Cocinero','Segunda cocina','Ayudante','Fregantina'];
 const MIN_COB=3,MAX_H=40,VAC_ANUAL=30;
 let EMP=[];
+const nomDe=id=>(EMP.find(x=>x.id===id)||{}).n;
 
 /* ---------- nube (Supabase) ---------- */
 let SES=null,HOTEL=null,estado='',pend=0,cadena=Promise.resolve();
@@ -100,13 +103,14 @@ function marca(t,err){estado=t;const e=document.getElementById('est');if(e){e.te
 const LK='hz-local-v2';
 let S={datos:{},extras:{},practicas:{},vac:[],notas:[],peticiones:[]};
 try{const g=JSON.parse(localStorage.getItem(LK)||'null');if(g){S.extras=g.extras||{};S.practicas=g.practicas||{};S.notas=g.notas||[]}}catch(e){}
-const sucias=new Set();let vacSucia=false;
+const sucias=new Set();let vacSucia=false,ajSucio=false;
 function guardarLocal(){try{localStorage.setItem(LK,JSON.stringify({extras:S.extras,practicas:S.practicas,notas:S.notas}))}catch(e){}}
-function guardar(){guardarLocal();sincronizar()}
+function guardar(){sincronizar()}
+function guardarAj(){guardarLocal();ajSucio=true;sincronizar()}
 function sincronizar(){
   cadena=cadena.then(async()=>{
-    const ks=[...sucias];sucias.clear();const vs=vacSucia;vacSucia=false;
-    if(!ks.length&&!vs)return;marca('Guardando…');
+    const ks=[...sucias];sucias.clear();const vs=vacSucia;vacSucia=false;const as=ajSucio;ajSucio=false;
+    if(!ks.length&&!vs&&!as)return;marca('Guardando…');
     try{
       for(const k of ks){
         const fin=iso(sumar(new Date(k+'T00:00'),6));
@@ -116,13 +120,14 @@ function sincronizar(){
       if(vs){await api('hz_vacaciones?id=not.is.null',{m:'DELETE'});
         const rows=S.vac.map(v=>({hotel_id:HOTEL,empleado_id:(EMP.find(e=>e.n===v.e)||{}).id,desde:v.i,hasta:v.f,tipo:v.t,nota:v.n||null})).filter(r=>r.empleado_id);
         if(rows.length)await api('hz_vacaciones',{m:'POST',b:rows,h:{Prefer:'return=minimal'}})}
+      if(as)await api('hz_ajustes?on_conflict=hotel_id,clave',{m:'POST',b:[['notas',S.notas],['extras',S.extras],['practicas',S.practicas]].map(([c,v])=>({hotel_id:HOTEL,clave:c,valor:v,actualizado:new Date().toISOString()})),h:{Prefer:'resolution=merge-duplicates,return=minimal'}});
       marca('Guardado en la nube')}
-    catch(e){ks.forEach(k=>sucias.add(k));vacSucia=vacSucia||vs;marca('No se pudo guardar: '+String(e.message).slice(0,80),1)}})}
+    catch(e){ks.forEach(k=>sucias.add(k));vacSucia=vacSucia||vs;ajSucio=ajSucio||as;marca('No se pudo guardar: '+String(e.message).slice(0,80),1)}})}
 async function cargarNube(){
   marca('Cargando…');
   HOTEL=await api('rpc/mi_hotel',{m:'POST',b:{}});
-  const em=await api('hz_empleados?select=id,nombre,grupo,token&activo=eq.true&order=orden,nombre');
-  EMP=em.map(e=>({id:e.id,n:e.nombre,g:e.grupo,rol:ROLES[e.grupo]||'',token:e.token}));
+  const em=await api('hz_empleados?select=id,nombre,grupo,token,tel&activo=eq.true&order=orden,nombre');
+  EMP=em.map(e=>({id:e.id,n:e.nombre,g:e.grupo,rol:ROLES[e.grupo]||'',token:e.token,tel:e.tel||''}));
   const id2n={};EMP.forEach(e=>id2n[e.id]=e.n);
   const tu=await todo(`hz_turnos?select=empleado_id,fecha,codigo&fecha=gte.${new Date().getFullYear()-1}-01-01&order=fecha`);
   S.datos={};tu.forEach(t=>{const n=id2n[t.empleado_id];if(!n)return;const f=new Date(t.fecha+'T00:00'),k=iso(lunes(f)),d=(f.getDay()+6)%7;
@@ -130,6 +135,9 @@ async function cargarNube(){
   const va=await api('hz_vacaciones?select=*&order=desde');
   S.vac=va.map(v=>({e:id2n[v.empleado_id],t:v.tipo,i:v.desde,f:v.hasta,n:v.nota||''})).filter(v=>v.e);
   S.peticiones=await api('hz_peticiones?select=*&order=creado.desc&limit=60');
+  const aj=await api('hz_ajustes?select=clave,valor'),ajm={};aj.forEach(a=>ajm[a.clave]=a.valor);
+  if(ajm.notas){S.notas=ajm.notas;S.extras=ajm.extras||{};S.practicas=ajm.practicas||{}}
+  else if(S.notas.length||Object.keys(S.extras).length||Object.keys(S.practicas).length){ajSucio=true;sincronizar()}
   marca('Guardado en la nube')}
 
 /* ---------- utilidades ---------- */
@@ -273,7 +281,7 @@ function cobertura(k,i){const d=S.datos[k]||{};let n=EMP.filter(e=>trabaja((d[e.
 function vPlantilla(){
   const k=iso(semana),fin=sumar(semana,6),hoyIso=iso(new Date()),vacia=semanaVacia(k);
   const prev=Object.keys(S.datos).filter(x=>x<k&&!semanaVacia(x)).sort().pop();
-  let h=`<div class="bar"><button class="btn" data-a="ant" aria-label="Semana anterior">←</button><div class="semana">${corto(semana)} – ${corto(fin)}</div><button class="btn" data-a="sig" aria-label="Semana siguiente">→</button><button class="btn" data-a="hoy">Esta semana</button><span class="grow"></span>${vacia&&prev?`<button class="btn pri" data-a="copiar" data-p="${prev}">Copiar semana del ${corto(new Date(prev+'T00:00'))}</button>`:''}</div>`;
+  let h=`<div class="pt">Horario de cocina · ${corto(semana)} – ${corto(fin)}</div><div class="bar"><button class="btn" data-a="ant" aria-label="Semana anterior">←</button><div class="semana">${corto(semana)} – ${corto(fin)}</div><button class="btn" data-a="sig" aria-label="Semana siguiente">→</button><button class="btn" data-a="hoy">Esta semana</button><button class="btn" data-a="imprimir">Imprimir / PDF</button><span class="grow"></span>${vacia&&prev?`<button class="btn pri" data-a="copiar" data-p="${prev}">Copiar semana del ${corto(new Date(prev+'T00:00'))}</button>`:''}</div>`;
   if(vacia)h+=`<div class="aviso warn">Esta semana no tiene turnos. Toca una celda para escribirlos${prev?' o copia la última semana con datos':''}.</div>`;
   else{const av=avisosSemana(k);h+=av.length?`<div class="aviso warn"><b>${av.length} aviso${av.length===1?'':'s'} en esta semana</b><ul>${av.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>`:`<div class="aviso ok">Sin avisos: cobertura, descansos y horas dentro de las reglas.</div>`}
   h+=`<div class="tabla"><table><thead><tr><th class="nom">Equipo</th>${DIAS.map((n,i)=>`<th class="${iso(sumar(semana,i))===hoyIso?'hoy':''}">${n}<br>${sumar(semana,i).getDate()}</th>`).join('')}<th>h/sem</th></tr></thead><tbody>`;
@@ -304,7 +312,7 @@ function vPersonas(tipo){
   let h=`<div class="bar"><button class="btn" data-a="ant">←</button><div class="semana">${corto(semana)} – ${corto(fin)}</div><button class="btn" data-a="sig">→</button><button class="btn" data-a="hoy">Esta semana</button></div>`;
   h+=`<div class="card"><h3>${extra?'Personal extra':'Alumnos en prácticas'} de la semana</h3>`;
   h+=lista.length?lista.map((p,ix)=>`<div class="fila" style="align-items:flex-start;flex-wrap:wrap"><span><b>${esc(p.n)}</b><br><small>${esc(p.rol)}</small></span><span style="display:flex;gap:4px;flex-wrap:wrap">${p.t.map((t,i)=>`<span class="pill ${t?'extra':'libre'}">${DIAS[i]} ${esc((t||'—').replace('\n',' · '))}</span>`).join('')}</span><button class="btn sm" data-del="${ix}">Quitar</button></div>`).join(''):`<div class="vacio-txt">Nadie apuntado esta semana.</div>`;
-  h+=`</div><form class="card" id="f-pers" data-tipo="${tipo}"><h3>Añadir ${extra?'extra':'alumno'}</h3><div class="form"><label>Nombre<input id="pn" required></label><label>${extra?'Puesto':'Centro educativo'}<input id="pr" required></label></div><div class="dias7">${DIAS.map((n,i)=>`<label>${n}<input id="pt${i}" placeholder="08:00-16:00"></label>`).join('')}</div><button class="btn pri" type="submit">Añadir</button></form><div class="aviso-guardado">Extras y prácticas se guardan solo en este navegador.</div>`;
+  h+=`</div><form class="card" id="f-pers" data-tipo="${tipo}"><h3>Añadir ${extra?'extra':'alumno'}</h3><div class="form"><label>Nombre<input id="pn" required></label><label>${extra?'Puesto':'Centro educativo'}<input id="pr" required></label></div><div class="dias7">${DIAS.map((n,i)=>`<label>${n}<input id="pt${i}" placeholder="08:00-16:00"></label>`).join('')}</div><button class="btn pri" type="submit">Añadir</button></form><div class="aviso-guardado">Extras y prácticas se guardan en la nube.</div>`;
   return h}
 
 function diasEn(i,f,y){const a=new Date(Math.max(new Date(i+'T00:00'),new Date(y+'-01-01T00:00'))),b=new Date(Math.min(new Date(f+'T00:00'),new Date(y+'-12-31T00:00')));return b<a?0:Math.round((b-a)/864e5)+1}
@@ -369,17 +377,25 @@ function vOpt(){
     <div class="bar" style="margin-top:8px"><button class="btn pri" data-a="optaplicar" data-o="${ix}">${vacia?'Aplicar a la semana':'Reemplazar turnos de la semana'}</button></div></div>`});
   return h}
 
+function turnoDe(n,f){const d=new Date(f+'T00:00'),k=iso(lunes(d));return((S.datos[k]||{})[n]||[])[(d.getDay()+6)%7]||'sin turno'}
+function textoSemana(e){const a=(S.datos[iso(semana)]||{})[e.n]||[];
+  return `Hola ${e.n}, tu horario del ${corto(semana)} al ${corto(sumar(semana,6))}:\n`+DIAS.map((d,i)=>`${d} ${sumar(semana,i).getDate()}: ${(a[i]||'sin turno').replace(/\n/g,' y ')}`).join('\n')+`\nVer tu turno y pedir cambios: ${location.origin}/e.html?t=${e.token}`}
+function waUrl(e){let t=(e.tel||'').replace(/\D/g,'');if(t.length===9)t='34'+t;return'https://wa.me/'+t+'?text='+encodeURIComponent(textoSemana(e))}
 function vEquipo(){
-  const base=location.origin+'/e.html?t=',pen=S.peticiones.filter(p=>p.estado==='pendiente'),id2n={};EMP.forEach(e=>id2n[e.id]=e.n);
+  const base=location.origin+'/e.html?t=',pen=S.peticiones.filter(p=>p.estado==='pendiente');
   const fd=s=>s?corto(new Date(s+'T00:00')):'';
-  let h=`<div class="card"><h3>Peticiones pendientes (${pen.length})</h3>${pen.length?pen.map(p=>`<div class="fila" style="align-items:flex-start;flex-wrap:wrap"><span><b>${esc(id2n[p.empleado_id]||'?')}</b> · ${esc(p.tipo)} · ${fd(p.desde)}${p.hasta&&p.hasta!==p.desde?' – '+fd(p.hasta):''}${p.nota?`<br><small>${esc(p.nota)}</small>`:''}</span><span style="display:flex;gap:6px"><button class="btn sm pri" data-pet="aprobada" data-id="${p.id}">Aprobar</button><button class="btn sm" data-pet="rechazada" data-id="${p.id}">Rechazar</button></span></div>`).join(''):'<div class="vacio-txt">Nada pendiente.</div>'}</div>`;
-  h+=`<div class="card"><h3>Enlaces del equipo</h3><div class="sub">Cada persona ve solo su turno con su enlace. Mándaselo por WhatsApp.</div>${EMP.map(e=>`<div class="fila"><span><b>${esc(e.n)}</b><br><small>${e.rol}</small></span><span style="display:flex;gap:6px"><button class="btn sm" data-copy="${base}${e.token}">Copiar enlace</button><a class="btn sm" style="text-decoration:none" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent('Hola '+e.n+', aquí ves tu turno y puedes pedir cambios: '+base+e.token)}">WhatsApp</a></span></div>`).join('')}</div>`;
+  const fila=p=>{const n=nomDe(p.empleado_id)||'?',cn=nomDe(p.con_empleado_id);let t;
+    if(p.tipo==='intercambio'&&cn&&p.desde)t=`<b>${esc(n)}</b> quiere cambiar su turno del ${fd(p.desde)} con <b>${esc(cn)}</b><br><small>${esc(n)}: ${esc(turnoDe(n,p.desde).replace(/\n/g,' y '))} ⇄ ${esc(cn)}: ${esc(turnoDe(cn,p.desde).replace(/\n/g,' y '))}</small>`;
+    else t=`<b>${esc(n)}</b> · ${esc(p.tipo)} · ${fd(p.desde)}${p.hasta&&p.hasta!==p.desde?' – '+fd(p.hasta):''}`;
+    return`<div class="fila" style="align-items:flex-start;flex-wrap:wrap"><span>${t}${p.nota?`<br><small>${esc(p.nota)}</small>`:''}</span><span style="display:flex;gap:6px"><button class="btn sm pri" data-pet="aprobada" data-id="${p.id}">Aprobar</button><button class="btn sm" data-pet="rechazada" data-id="${p.id}">Rechazar</button></span></div>`};
+  let h=`<div class="card"><h3>Peticiones pendientes (${pen.length})</h3>${pen.length?pen.map(fila).join(''):'<div class="vacio-txt">Nada pendiente.</div>'}</div>`;
+  h+=`<div class="card"><h3>Equipo: enlaces y WhatsApp</h3><div class="sub">Semana que se envía: <b>${corto(semana)} – ${corto(sumar(semana,6))}</b> (cámbiala en Plantilla). Apunta el móvil de cada uno para mandarle su semana ya escrita.</div>${EMP.map(e=>`<div class="fila" style="flex-wrap:wrap"><span><b>${esc(e.n)}</b><br><small>${e.rol}</small></span><span style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><input data-tel="${e.id}" value="${esc(e.tel)}" placeholder="Móvil" inputmode="tel" style="width:120px;min-height:32px"><button class="btn sm" data-copy="${base}${e.token}">Copiar enlace</button>${e.tel?`<a class="btn sm pri" style="text-decoration:none" target="_blank" rel="noopener" href="${waUrl(e)}">Enviar semana</a>`:''}</span></div>`).join('')}</div>`;
   return h}
 
 function vNotas(){
   const lista=[...S.notas].map((n,i)=>({...n,i})).sort((a,b)=>a.f.localeCompare(b.f)),col={evento:'--work-fg',aviso:'--bad-fg',info:'--jefe-fg'};
   return`<div class="card"><h3>Eventos y avisos</h3>${lista.length?lista.map(n=>`<div class="fila"><span><span class="nota-tipo" style="color:var(${col[n.t]||'--muted'})">${esc(n.t)}</span> · <small>${corto(new Date(n.f+'T00:00'))}</small><br>${esc(n.x)}</span><button class="btn sm" data-ndel="${n.i}">Quitar</button></div>`).join(''):'<div class="vacio-txt">No hay notas.</div>'}</div>
-  <form class="card" id="f-nota"><h3>Añadir nota</h3><div class="form"><label>Fecha<input type="date" id="nf" required value="${iso(new Date())}"></label><label>Tipo<select id="nt"><option value="evento">evento</option><option value="aviso">aviso</option><option value="info">info</option></select></label></div><br><label style="display:flex;flex-direction:column;gap:3px;font-size:.78rem;color:var(--muted)">Texto<textarea id="nx" rows="2" required></textarea></label><br><button class="btn pri" type="submit">Añadir</button></form><div class="aviso-guardado">Las notas se guardan solo en este navegador.</div>`}
+  <form class="card" id="f-nota"><h3>Añadir nota</h3><div class="form"><label>Fecha<input type="date" id="nf" required value="${iso(new Date())}"></label><label>Tipo<select id="nt"><option value="evento">evento</option><option value="aviso">aviso</option><option value="info">info</option></select></label></div><br><label style="display:flex;flex-direction:column;gap:3px;font-size:.78rem;color:var(--muted)">Texto<textarea id="nx" rows="2" required></textarea></label><br><button class="btn pri" type="submit">Añadir</button></form><div class="aviso-guardado">Los avisos, eventos e info de las próximas 3 semanas los ve cada empleado en su móvil.</div>`}
 
 /* ---------- eventos ---------- */
 document.addEventListener('click',async e=>{
@@ -390,13 +406,15 @@ document.addEventListener('click',async e=>{
   const cp=e.target.closest('[data-copy]');if(cp){try{await navigator.clipboard.writeText(cp.dataset.copy);cp.textContent='¡Copiado!'}catch(x){prompt('Copia el enlace:',cp.dataset.copy)}return}
   const pt=e.target.closest('[data-pet]');if(pt){const p=S.peticiones.find(x=>x.id===pt.dataset.id);
     try{await api('hz_peticiones?id=eq.'+p.id,{m:'PATCH',b:{estado:pt.dataset.pet},h:{Prefer:'return=minimal'}});p.estado=pt.dataset.pet;
-      if(pt.dataset.pet==='aprobada'&&p.tipo==='vacaciones'&&p.desde){const n=(EMP.find(x=>x.id===p.empleado_id)||{}).n;if(n){S.vac.push({e:n,t:'extra',i:p.desde,f:p.hasta||p.desde,n:p.nota||'Petición'});vacSucia=true;guardar()}}}
+      if(pt.dataset.pet==='aprobada'&&p.tipo==='vacaciones'&&p.desde){const n=nomDe(p.empleado_id);if(n){S.vac.push({e:n,t:'extra',i:p.desde,f:p.hasta||p.desde,n:p.nota||'Petición'});vacSucia=true;guardar()}}
+      if(pt.dataset.pet==='aprobada'&&p.tipo==='intercambio'&&p.desde){const a=nomDe(p.empleado_id),b=nomDe(p.con_empleado_id);if(a&&b){const f=new Date(p.desde+'T00:00'),k=iso(lunes(f)),d=(f.getDay()+6)%7,fa=filaEmp(k,a),fb=filaEmp(k,b);[fa[d],fb[d]]=[fb[d],fa[d]];sucias.add(k);guardar();const av=avisosSemana(k).length;setTimeout(()=>marca(av?'Cambio hecho: revisa '+av+' aviso(s) de esa semana':'Cambio hecho y guardado'),1500)}}}
     catch(x){marca('Error: '+String(x.message).slice(0,60),1)}pintar();return}
   const a=e.target.closest('[data-a]')?.dataset.a;
   if(a==='salir'){e.preventDefault();SES=null;localStorage.removeItem('hz-ses');EMP=[];login();return}
   if(a==='ant'){semana=sumar(semana,-7);edit=null;pintar()}
   else if(a==='sig'){semana=sumar(semana,7);edit=null;pintar()}
   else if(a==='hoy'){semana=lunes(new Date());edit=null;pintar()}
+  else if(a==='imprimir'){window.print()}
   else if(a==='aant'){anioVac--;pintar()}else if(a==='asig'){anioVac++;pintar()}
   else if(a==='irplantilla'){tab='plantilla';pintar()}else if(a==='irannual'){tab='anual';pintar()}else if(a==='irvac'){tab='vacaciones';pintar()}
   else if(a==='optgen'){OPT.busy=true;pintar();setTimeout(()=>{const c=ctxOpt(),k=iso(semana);OPT.seed=(OPT.k===k&&OPT.opts)?OPT.seed+1:1;OPT.k=k;OPT.ctx=c;OPT.opts=optimizar(c,OPT.seed);OPT.busy=false;pintar()},40)}
@@ -405,21 +423,22 @@ document.addEventListener('click',async e=>{
   else if(a==='gturno'){filaEmp(edit.k,edit.e)[edit.i]=$('#turno-txt').value.trim();sucias.add(edit.k);guardar();edit=null;pintar()}
   else if(a==='bturno'){filaEmp(edit.k,edit.e)[edit.i]='';sucias.add(edit.k);guardar();edit=null;pintar()}
   else if(a==='cturno'){edit=null;pintar()}
-  const d=e.target.closest('[data-del]');if(d){S[tab][iso(semana)].splice(+d.dataset.del,1);guardarLocal();pintar()}
+  const d=e.target.closest('[data-del]');if(d){S[tab][iso(semana)].splice(+d.dataset.del,1);guardarAj();pintar()}
   const v=e.target.closest('[data-vdel]');if(v){S.vac.splice(+v.dataset.vdel,1);vacSucia=true;guardar();pintar()}
-  const n=e.target.closest('[data-ndel]');if(n){S.notas.splice(+n.dataset.ndel,1);guardarLocal();pintar()}
+  const n=e.target.closest('[data-ndel]');if(n){S.notas.splice(+n.dataset.ndel,1);guardarAj();pintar()}
 });
+document.addEventListener('change',async e=>{const t=e.target.closest('[data-tel]');if(!t)return;const em=EMP.find(x=>x.id===t.dataset.tel);em.tel=t.value.trim();try{await api('hz_empleados?id=eq.'+em.id,{m:'PATCH',b:{tel:em.tel||null},h:{Prefer:'return=minimal'}});pintar()}catch(x){marca('Error: '+String(x.message).slice(0,60),1)}});
 document.addEventListener('submit',async e=>{
   e.preventDefault();const f=e.target.id;
   if(f==='f-login'){try{await auth({email:$('#lm').value.trim(),password:$('#lp').value},'password');await arrancar()}catch(x){login(x.message)}}
-  else if(f==='f-pers'){const tipo=e.target.dataset.tipo,k=iso(semana);(S[tipo][k]=S[tipo][k]||[]).push({n:$('#pn').value.trim(),rol:$('#pr').value.trim(),t:DIAS.map((_,i)=>$('#pt'+i).value.trim())});guardarLocal();pintar()}
+  else if(f==='f-pers'){const tipo=e.target.dataset.tipo,k=iso(semana);(S[tipo][k]=S[tipo][k]||[]).push({n:$('#pn').value.trim(),rol:$('#pr').value.trim(),t:DIAS.map((_,i)=>$('#pt'+i).value.trim())});guardarAj();pintar()}
   else if(f==='f-vac'){if($('#vf').value<$('#vi').value)return;S.vac.push({e:$('#ve').value,t:$('#vt').value,i:$('#vi').value,f:$('#vf').value,n:$('#vn').value.trim()});vacSucia=true;guardar();pintar()}
-  else if(f==='f-nota'){S.notas.push({f:$('#nf').value,t:$('#nt').value,x:$('#nx').value.trim()});guardarLocal();pintar()}
+  else if(f==='f-nota'){S.notas.push({f:$('#nf').value,t:$('#nt').value,x:$('#nx').value.trim()});guardarAj();pintar()}
 });
 async function arrancar(){
   $('#raiz').innerHTML='<div class="sub">Cargando…</div>';
   try{await cargarNube();esqueleto();pintar()}
   catch(x){if(!SES)login(x.message==='sesión'?'La sesión caducó, entra otra vez.':x.message);else $('#raiz').innerHTML=`<div class="card"><h3>No se pudo cargar</h3><div class="vacio-txt">${esc(String(x.message).slice(0,160))}</div><button class="btn pri" onclick="arrancar()">Reintentar</button></div>`}}
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&SES&&EMP.length&&!sucias.size&&!vacSucia&&!edit)cargarNube().then(pintar).catch(()=>{})});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&SES&&EMP.length&&!sucias.size&&!vacSucia&&!ajSucio&&!edit)cargarNube().then(pintar).catch(()=>{})});
 if(SES)arrancar();else login();
 </script></body></html>
