@@ -260,7 +260,7 @@ function resumen(ctx,G){const {emp}=ctx;let partidos=0,cobertura=[];const DN=['l
 
 /* ---------- interfaz ---------- */
 let tab='plantilla',semana=lunes(new Date()),edit=null,anioVac=new Date().getFullYear();
-const TABS=[['plantilla','Plantilla'],['ahora','Ahora'],['extras','Extras'],['practicas','Prácticas'],['vacaciones','Vacaciones'],['anual','Año completo'],['opt','Optimizador'],['horas','Horas'],['equipo','Equipo'],['notas','Notas']];
+const TABS=[['plantilla','Plantilla'],['ahora','Ahora'],['extras','Extras'],['practicas','Prácticas'],['vacaciones','Vacaciones'],['anual','Año completo'],['opt','Optimizador'],['mes','Mes'],['horas','Horas'],['equipo','Equipo'],['notas','Notas']];
 function reloj(){const n=new Date(),h=document.getElementById('hora');if(!h)return;h.textContent=String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0');
   document.getElementById('fecha').textContent=DIAS_LARGO[(n.getDay()+6)%7]+' '+n.getDate()+' '+MESES[n.getMonth()]}
 setInterval(()=>{reloj();if(tab==='ahora'&&EMP.length)pintar()},30000);
@@ -268,7 +268,7 @@ function esqueleto(){$('#raiz').innerHTML=`<header><div><h1>Horarios de Cocina</
 function login(m){$('#raiz').innerHTML=`<form class="login card" id="f-login"><h1>Horarios de Cocina</h1><div class="sub">Entra con tu cuenta de jefe</div><input id="lm" type="email" placeholder="Correo" autocomplete="username" required><input id="lp" type="password" placeholder="Contraseña" autocomplete="current-password" required><button class="btn pri" type="submit">Entrar</button><div class="est err">${esc(m||'')}</div></form>`}
 function pintar(){if(!document.getElementById('vista'))esqueleto();
   $('#tabs').innerHTML=TABS.map(([k,n])=>`<button role="tab" aria-selected="${k===tab}" data-t="${k}">${n}${k==='equipo'&&S.peticiones.filter(p=>p.estado==='pendiente').length?' ('+S.peticiones.filter(p=>p.estado==='pendiente').length+')':''}</button>`).join('');
-  const f={plantilla:vPlantilla,ahora:vAhora,extras:()=>vPersonas('extras'),practicas:()=>vPersonas('practicas'),vacaciones:vVacaciones,anual:vAnual,opt:vOpt,horas:vHoras,equipo:vEquipo,notas:vNotas}[tab];$('#vista').innerHTML=f()}
+  const f={plantilla:vPlantilla,ahora:vAhora,extras:()=>vPersonas('extras'),practicas:()=>vPersonas('practicas'),vacaciones:vVacaciones,anual:vAnual,opt:vOpt,mes:vMes,horas:vHoras,equipo:vEquipo,notas:vNotas}[tab];$('#vista').innerHTML=f()}
 
 function avisosSemana(k){const av=[],d=S.datos[k];if(!d)return av;
   EMP.forEach(e=>{const a=d[e.n];if(!a)return;const h=a.reduce((s,t)=>s+horas(t),0);if(h>MAX_H)av.push(`${e.n} suma ${fmtH(h)} h (máximo ${MAX_H} h)`);
@@ -377,6 +377,31 @@ function vOpt(){
     <div class="bar" style="margin-top:8px"><button class="btn pri" data-a="optaplicar" data-o="${ix}">${vacia?'Aplicar a la semana':'Reemplazar turnos de la semana'}</button></div></div>`});
   return h}
 
+let MES={y:new Date(new Date().getFullYear(),new Date().getMonth()+1,1).getFullYear(),m:new Date(new Date().getFullYear(),new Date().getMonth()+1,1).getMonth(),busy:false,res:null,prog:''};
+const MESN=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+function semanasMes(){const r=[],fin=new Date(MES.y,MES.m+1,0);for(let w=lunes(new Date(MES.y,MES.m,1));w<=fin;w=sumar(w,7))r.push(w);return r}
+async function genMes(){
+  MES.busy=true;MES.res=null;pintar();const sem0=semana,tmp=[],res=[];
+  try{for(const w of semanasMes()){const k=iso(w);
+    if(!semanaVacia(k)){res.push({k,w,omit:true});continue}
+    MES.prog='Calculando semana del '+corto(w)+'…';pintar();await new Promise(r=>setTimeout(r,30));
+    semana=w;const c=ctxOpt(),opts=optimizar(c,1);let b=opts[0];opts.forEach(o=>{if(o.avisos.length<b.avisos.length)b=o});
+    S.datos[k]={};EMP.forEach((m,i)=>{S.datos[k][m.n]=b.G[i].map(COD_TXT)});tmp.push(k);
+    res.push({k,w,avisos:b.avisos,G:b.G,ctx:c})}}
+  finally{semana=sem0;tmp.forEach(k=>delete S.datos[k]);MES.res=res;MES.busy=false;MES.prog='';pintar()}}
+function vMes(){
+  const ws=semanasMes();
+  let h=`<div class="bar"><button class="btn" data-a="mant">←</button><div class="semana">${MESN[MES.m]} ${MES.y}</div><button class="btn" data-a="msig">→</button><span class="grow"></span><button class="btn pri" data-a="mgen" ${MES.busy?'disabled':''}>${MES.busy?'Calculando…':'Generar el mes'}</button></div>`;
+  h+=`<div class="card"><div class="vacio-txt">Genera de una vez las semanas de ${MESN[MES.m]} que están vacías, una detrás de otra, respetando vacaciones, bajas y el descanso entre semanas. Las semanas que ya tienen turnos no se tocan. No cambia nada hasta que apliques.</div><small>${ws.map(w=>corto(w)+(semanaVacia(iso(w))?'':' (ya cargada)')).join(' · ')}</small></div>`;
+  if(MES.busy)return h+`<div class="card"><h3>${esc(MES.prog||'Calculando…')}</h3></div>`;
+  if(!MES.res)return h;
+  const nuevas=MES.res.filter(r=>!r.omit),tot=nuevas.reduce((s,r)=>s+r.avisos.length,0);
+  h+=`<div class="card"><div class="bar"><h3 style="margin:0">Propuesta: ${nuevas.length} semana${nuevas.length===1?'':'s'}</h3><span class="grow"></span><span class="cobp ${tot?'bad':'ok'}">${tot?tot+' avisos':'Sin avisos'}</span><button class="btn pri" data-a="maplicar" ${nuevas.length?'':'disabled'}>Aplicar el mes</button></div></div>`;
+  MES.res.forEach(r=>{
+    if(r.omit){h+=`<div class="card"><small><b>${corto(r.w)} – ${corto(sumar(r.w,6))}</b>: ya tiene turnos, no se toca.</small></div>`;return}
+    h+=`<details class="card"><summary><b>${corto(r.w)} – ${corto(sumar(r.w,6))}</b> · <span class="cobp ${r.avisos.length?'bad':'ok'}">${r.avisos.length?r.avisos.length+' avisos':'Sin avisos'}</span></summary>
+    <div class="tabla" style="margin:8px 0"><table><thead><tr><th class="nom">Equipo</th>${DIAS.map((n,i)=>`<th>${n}<br>${sumar(r.w,i).getDate()}</th>`).join('')}</tr></thead><tbody>${EMP.map((e,i)=>`<tr><td class="nom"><b>${esc(e.n)}</b></td>${r.G[i].map(c=>{const t=COD_TXT(c);let cl=tipoTurno(t);if(cl==='trab'&&e.g===0)cl='jefe';return`<td><div class="cel ${cl}">${t.split('\n').map(x=>`<span>${esc(x)}</span>`).join('')}</div></td>`}).join('')}</tr>`).join('')}</tbody></table></div>${r.avisos.length?`<div class="aviso warn"><ul>${r.avisos.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>`:''}</details>`});
+  return h}
 function turnoDe(n,f){const d=new Date(f+'T00:00'),k=iso(lunes(d));return((S.datos[k]||{})[n]||[])[(d.getDay()+6)%7]||'sin turno'}
 function textoSemana(e){const a=(S.datos[iso(semana)]||{})[e.n]||[];
   return `Hola ${e.n}, tu horario del ${corto(semana)} al ${corto(sumar(semana,6))}:\n`+DIAS.map((d,i)=>`${d} ${sumar(semana,i).getDate()}: ${(a[i]||'sin turno').replace(/\n/g,' y ')}`).join('\n')+`\nVer tu turno y pedir cambios: ${location.origin}/e.html?t=${e.token}`}
@@ -429,6 +454,10 @@ document.addEventListener('click',async e=>{
   else if(a==='imprimir'){window.print()}
   else if(a==='aant'){anioVac--;pintar()}else if(a==='asig'){anioVac++;pintar()}
   else if(a==='irplantilla'){tab='plantilla';pintar()}else if(a==='irannual'){tab='anual';pintar()}else if(a==='irvac'){tab='vacaciones';pintar()}
+  else if(a==='mant'){MES.m--;if(MES.m<0){MES.m=11;MES.y--}MES.res=null;pintar()}
+  else if(a==='msig'){MES.m++;if(MES.m>11){MES.m=0;MES.y++}MES.res=null;pintar()}
+  else if(a==='mgen'){genMes()}
+  else if(a==='maplicar'){MES.res.filter(r=>!r.omit).forEach(r=>{S.datos[r.k]={};EMP.forEach((m,i)=>{S.datos[r.k][m.n]=r.G[i].map(COD_TXT)});sucias.add(r.k)});guardar();MES.res=null;tab='plantilla';edit=null;pintar()}
   else if(a==='optgen'){OPT.busy=true;pintar();setTimeout(()=>{const c=ctxOpt(),k=iso(semana);OPT.seed=(OPT.k===k&&OPT.opts)?OPT.seed+1:1;OPT.k=k;OPT.ctx=c;OPT.opts=optimizar(c,OPT.seed);OPT.busy=false;pintar()},40)}
   else if(a==='optaplicar'){const o=OPT.opts[+e.target.closest('[data-o]').dataset.o],k=iso(semana);S.datos[k]={};EMP.forEach((m,i)=>{S.datos[k][m.n]=o.G[i].map(COD_TXT)});sucias.add(k);guardar();OPT.opts=null;tab='plantilla';edit=null;pintar()}
   else if(a==='copiar'){const p=e.target.closest('[data-p]').dataset.p,k=iso(semana);S.datos[k]={};EMP.forEach(m=>{S.datos[k][m.n]=[...filaEmp(p,m.n)]});sucias.add(k);guardar();pintar()}
